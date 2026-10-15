@@ -26,6 +26,7 @@ from tagstudio.core.viewer.decoding import (
     DecodeErrorKind,
     DecodeFailure,
     DecodeOutcome,
+    DecodePolicy,
     DecodeRequest,
     decode_image,
 )
@@ -410,6 +411,48 @@ def test_entry_removed_while_loading_is_not_shown(
     qtbot.waitUntil(lambda: manager.scheduler.is_idle, timeout=TIMEOUT_MS)
     assert viewer.canvas.message == Translations["image_viewer.error.missing_entry"]
     assert viewer.canvas.image is None
+
+
+def test_entry_relinked_while_failing_decode_is_reloaded(
+    qtbot: QtBot,
+    manager: ImageViewerManager,
+    library,
+    decode: GatedDecode,  # pyright: ignore
+):
+    lib, ids = library
+    (lib.library_dir / "c.png").write_bytes(b"garbage")
+    _open_and_settle(qtbot, manager, lib, ids)
+    viewer = manager.viewer
+    assert viewer is not None
+
+    decode.gate = threading.Event()
+    decode.entered.clear()
+    viewer.navigate.emit(1)  # c.png, which fails to decode
+    assert decode.entered.wait(5)
+    Image.new("RGB", (300, 40)).save(lib.library_dir / "other.png")
+    assert lib.update_entry_path(ids[2], Path("other.png"))
+    decode.gate.set()
+    qtbot.waitUntil(lambda: _shown_size(manager) == (300, 40), timeout=TIMEOUT_MS)
+    assert viewer.canvas.message == ""
+
+
+def test_upscale_policy_reaches_the_canvas(qtbot: QtBot, library, decode: GatedDecode):  # pyright: ignore
+    lib, ids = library
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    m = ImageViewerManager(
+        parent, runner=ImageDecodeRunner(decode), policy=DecodePolicy(upscale=True)
+    )
+    try:
+        m.open(lib, ids, start_id=ids[0])
+        viewer = m.viewer
+        assert viewer is not None
+        qtbot.waitUntil(lambda: viewer.canvas.image is not None, timeout=TIMEOUT_MS)
+        size = viewer.canvas.display_size()
+        assert size is not None
+        assert size[0] > 80  # a.png is 80x40, enlarged to fit
+    finally:
+        m.shutdown()
 
 
 def test_corrupt_file(qtbot: QtBot, manager: ImageViewerManager, library):  # pyright: ignore

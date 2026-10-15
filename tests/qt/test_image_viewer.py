@@ -376,6 +376,13 @@ def test_canvas_high_dpi(canvas: ImageCanvas, monkeypatch: pytest.MonkeyPatch):
     canvas.grab()
 
 
+def test_canvas_upscale(canvas: ImageCanvas):
+    canvas.set_image(_image(40, 20))
+    assert canvas.display_size() == (40, 20)
+    canvas.set_upscale(True)
+    assert canvas.display_size() == (400, 200)
+
+
 def test_canvas_resize_emits_target_size_changed(qtbot: QtBot, canvas: ImageCanvas):
     with qtbot.waitSignal(canvas.target_size_changed, timeout=1000):
         canvas.resize(500, 400)

@@ -192,6 +192,7 @@ class ImageViewerManager(QObject):
             viewer.navigate_last.connect(lambda: self._on_navigate_to_end(last=True))
             viewer.closed.connect(self._on_viewer_closed)
             viewer.canvas.target_size_changed.connect(self._resize_timer.start)
+            viewer.canvas.set_upscale(self._policy.upscale)
             self._viewer = viewer
         return self._viewer
 
@@ -360,8 +361,9 @@ class ImageViewerManager(QObject):
         assert isinstance(key, LoadKey)
         actions = self._scheduler.finish(request.request_id)
         if actions.apply and self._session is not None and self._viewer is not None:
-            if isinstance(outcome, DecodedImage) and not self._entry_still_at(key.image):
-                # The entry was removed or relinked from the main window while it loaded.
+            if not self._entry_still_at(key.image):
+                # The entry was removed or relinked from the main window while it loaded, so
+                # neither the image nor an error for the old file applies to it anymore.
                 self._show_current()
             elif isinstance(outcome, DecodedImage):
                 self._show_image(key, outcome)

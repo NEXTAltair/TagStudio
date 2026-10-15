@@ -100,6 +100,13 @@ class ImageCanvas(QWidget):
             self._message = ""
         self.update()
 
+    def set_upscale(self, upscale: bool) -> None:
+        """Whether images smaller than the canvas are enlarged to fit it."""
+        if upscale != self._upscale:
+            self._upscale = upscale
+            self._scaled = None
+            self.update()
+
     def set_message(self, message: str) -> None:
         """Show a message instead of the image."""
         self.set_image(None)
