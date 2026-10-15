@@ -4,6 +4,7 @@
 # pyright: reportPrivateUsage=false
 
 
+import gc
 from collections.abc import Generator
 from copy import deepcopy
 from pathlib import Path
@@ -18,6 +19,17 @@ from tagstudio.core.library.alchemy.models import Entry
 from tagstudio.i18n.translations import Translations
 from tagstudio.qt.image_viewer_manager import ImageViewerManager
 from tagstudio.qt.qt_driver import QtDriver
+
+
+@pytest.fixture(autouse=True)
+def _collect_garbage_on_gui_thread():
+    """Collect garbage left by earlier tests before the decode thread starts allocating.
+
+    Some earlier tests leave unreachable widgets in reference cycles. If a garbage collection
+    is triggered by the decode thread, those QObjects are destroyed on the wrong thread, which
+    can crash Qt (e.g. a running animation left registered with the GUI thread's timer).
+    """
+    gc.collect()
 
 
 @pytest.fixture

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 
+import gc
 import threading
 from pathlib import Path
 
@@ -22,6 +23,17 @@ from tagstudio.core.viewer.decoding import (
 from tagstudio.qt.utils.image_decode_runner import ImageDecodeRunner
 
 TIMEOUT_MS = 5000
+
+
+@pytest.fixture(autouse=True)
+def _collect_garbage_on_gui_thread():
+    """Collect garbage left by earlier tests before the decode thread starts allocating.
+
+    Some earlier tests leave unreachable widgets in reference cycles. If a garbage collection
+    is triggered by the decode thread, those QObjects are destroyed on the wrong thread, which
+    can crash Qt (e.g. a running animation left registered with the GUI thread's timer).
+    """
+    gc.collect()
 
 
 class BlockingDecode:

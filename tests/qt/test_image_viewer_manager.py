@@ -4,6 +4,7 @@
 # pyright: reportPrivateUsage=false
 
 
+import gc
 import os
 import subprocess
 import sys
@@ -34,6 +35,17 @@ from tagstudio.qt.utils.image_decode_runner import ImageDecodeRunner
 TIMEOUT_MS = 5000
 
 COLORS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255)]
+
+
+@pytest.fixture(autouse=True)
+def _collect_garbage_on_gui_thread():
+    """Collect garbage left by earlier tests before the decode thread starts allocating.
+
+    Some earlier tests leave unreachable widgets in reference cycles. If a garbage collection
+    is triggered by the decode thread, those QObjects are destroyed on the wrong thread, which
+    can crash Qt (e.g. a running animation left registered with the GUI thread's timer).
+    """
+    gc.collect()
 
 
 class GatedDecode:

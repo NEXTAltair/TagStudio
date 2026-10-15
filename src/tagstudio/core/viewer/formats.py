@@ -8,10 +8,11 @@ This table describes what the viewer can actually decode. It is intentionally se
 `MediaTypes` is only used here to read compound and equivalent extensions, never modified.
 """
 
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 
-from tagstudio.core.media_types import MediaTypes
+from tagstudio.core.media_types import MediaTypeGroup, MediaTypes
 from tagstudio.core.utils.decompression import get_inner_ext
 
 
@@ -149,3 +150,38 @@ def support_for(path: Path) -> FormatSupport:
 def is_viewable(path: Path) -> bool:
     """Return True if the viewer can attempt to decode this path."""
     return codec_for(path) is not None
+
+
+def viewable_name_predicate() -> Callable[[str], bool]:
+    """Return a fast version of `is_viewable()` for many relative POSIX path strings.
+
+    The extension sets are computed once, from the current `MediaTypes` registrations, so each
+    check is only a few string and set operations. Names whose result can depend on more than
+    their last suffix (compressed files, compound extensions) use `is_viewable()` itself.
+    """
+    supported: set[str] = set()
+    for ext in SUPPORTED_EXTS:
+        supported |= MediaTypes.get_equivalent_exts(ext) | {ext}
+
+    compressed_group = getattr(MediaTypes, "compressed", None)
+    exact_suffixes: set[str] = set()
+    if isinstance(compressed_group, MediaTypeGroup):
+        for context_exts in compressed_group.context_sets.values():
+            exact_suffixes |= context_exts
+    for group in MediaTypes.all_groups:
+        for file_type in group.types:
+            compound_exts = (e for e in file_type.exts if e.count(".") > 1)
+            exact_suffixes |= {f".{e.rsplit('.', 1)[1]}" for e in compound_exts}
+
+    def predicate(name: str) -> bool:
+        # Same rule as `PurePath.suffix`: a leading or trailing dot isn't a suffix.
+        file_name = name[name.rfind("/") + 1 :]
+        dot = file_name.rfind(".")
+        if not 0 < dot < len(file_name) - 1:
+            return False
+        suffix = file_name[dot:].lower()
+        if suffix in exact_suffixes:
+            return is_viewable(Path(name))
+        return suffix in supported
+
+    return predicate

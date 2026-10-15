@@ -91,7 +91,7 @@ def test_path_cache_is_bounded(library: Library):
 
 def test_scan(library: Library):
     reader = LibraryReader(library, chunk_size=1)
-    verdicts = reader.scan([1, 2, 404], lambda p: p.suffix == ".md")
+    verdicts = reader.scan([1, 2, 404], lambda p: p.endswith(".md"))
     assert verdicts == [False, True, False]
     assert reader.query_count == 3
 

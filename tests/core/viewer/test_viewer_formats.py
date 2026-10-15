@@ -13,6 +13,7 @@ from tagstudio.core.viewer.formats import (
     codec_for,
     is_viewable,
     support_for,
+    viewable_name_predicate,
     viewer_ext,
 )
 
@@ -66,3 +67,31 @@ def test_format_lookup_does_not_modify_media_types():
     for name in ("a.png", "a.jpeg_large", "a.png.gz", "a.cr2", "a.mp4"):
         support_for(Path(name))
     assert MediaTypes._snapshot() == before  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a.png",
+        "dir/A.JPG",
+        "x.jpeg_large",
+        "x.heic",
+        "photo.CR3",
+        "a.png.gz",
+        "a.nef.zst",
+        "a.txt.gz",
+        "a.tar.gz",
+        "a.mp4",
+        "noext",
+        "dir.png/noext",
+        ".png",
+        "dir/.png",
+        "a.",
+        "a..png",
+        "a.exr",
+        "archive.tar.xz",
+    ],
+)
+def test_viewable_name_predicate_matches_is_viewable(name: str):
+    predicate = viewable_name_predicate()
+    assert predicate(name) == is_viewable(Path(name))

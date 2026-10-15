@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import Connection, Engine, select
+from sqlalchemy import Connection, Engine, String, select, type_coerce
 
 from tagstudio.core.library.alchemy.models import Entry
 
@@ -165,11 +165,12 @@ class LibraryReader:
     def resolve_one(self, entry_id: int) -> EntryLocation | None:
         return self.resolve([entry_id])[0]
 
-    def scan(self, entry_ids: Sequence[int], predicate: Callable[[Path], bool]) -> list[bool]:
+    def scan(self, entry_ids: Sequence[int], predicate: Callable[[str], bool]) -> list[bool]:
         """Return `predicate(relative_path)` for each entry, in the given order.
 
-        Paths are read in chunks over a single connection and aren't kept afterwards, so memory
-        use stays bounded by the chunk size. Missing entries map to False.
+        Paths are read in chunks over a single connection, as stored (relative POSIX strings,
+        without creating `Path` objects), and aren't kept afterwards, so memory use stays bounded
+        by the chunk size. Missing entries map to False.
 
         Raises:
             LibraryUnavailableError: If the library was closed or replaced.
@@ -179,7 +180,9 @@ class LibraryReader:
         verdicts: dict[int, bool] = {}
         with self._engine.connect() as conn:
             for chunk in _chunks(unique, self._chunk_size):
-                found = self._select_paths(conn, chunk)
+                self.query_count += 1
+                stmt = select(Entry.id, type_coerce(Entry.path, String)).where(Entry.id.in_(chunk))
+                found: dict[int, str] = {row[0]: row[1] for row in conn.execute(stmt)}
                 for entry_id in chunk:
                     path = found.get(entry_id)
                     verdicts[entry_id] = path is not None and predicate(path)

@@ -30,7 +30,7 @@ from tagstudio.core.viewer.decoding import (
     DecodeRequest,
     FileVersion,
 )
-from tagstudio.core.viewer.formats import is_viewable
+from tagstudio.core.viewer.formats import viewable_name_predicate
 from tagstudio.core.viewer.library_reader import (
     EntryLocation,
     LibraryReader,
@@ -143,7 +143,7 @@ class ImageViewerManager(QObject):
             return OpenResult.NO_LIBRARY
 
         snapshot = tuple(entry_ids)
-        viewable = reader.scan(snapshot, is_viewable)
+        viewable = reader.scan(snapshot, viewable_name_predicate())
         session = ViewerSession.from_snapshot(snapshot, viewable, start_id)
         if session.count == 0:
             reader.close()

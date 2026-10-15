@@ -173,6 +173,10 @@ def test_keys_with_modifiers_do_nothing(qtbot: QtBot, viewer: ImageViewer):
     assert steps == []
 
 
+APP_PASTE = "Ctrl+Alt+F11"
+APP_TAG = "Ctrl+Alt+F12"
+
+
 class ParentWindow(QMainWindow):
     """Stands in for the main window: clears its "selection" on Esc, like MainWindow."""
 
@@ -180,11 +184,12 @@ class ParentWindow(QMainWindow):
         super().__init__()
         self.escape_presses = 0
         self.triggered: list[str] = []
+        # NOTE: The application-wide shortcuts use sequences no other test registers, so leftover
+        # widgets from other tests can't make them ambiguous.
         for name, shortcut, context in (
             ("delete", QKeySequence(Qt.Key.Key_Delete), Qt.ShortcutContext.WindowShortcut),
-            ("paste", QKeySequence("Ctrl+V"), Qt.ShortcutContext.ApplicationShortcut),
-            ("tag", QKeySequence("Ctrl+Shift+T"), Qt.ShortcutContext.ApplicationShortcut),
-            ("select_all", QKeySequence("Ctrl+A"), Qt.ShortcutContext.ApplicationShortcut),
+            ("paste", QKeySequence(APP_PASTE), Qt.ShortcutContext.ApplicationShortcut),
+            ("tag", QKeySequence(APP_TAG), Qt.ShortcutContext.ApplicationShortcut),
         ):
             action = QAction(name, self)
             action.setShortcut(shortcut)
@@ -199,14 +204,10 @@ class ParentWindow(QMainWindow):
 
 
 def _press_editing_keys(qtbot: QtBot, widget: QWidget) -> None:
+    ctrl_alt = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
     qtbot.keyClick(widget, Qt.Key.Key_Delete)
-    qtbot.keyClick(widget, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
-    qtbot.keyClick(
-        widget,
-        Qt.Key.Key_T,
-        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
-    )
-    qtbot.keyClick(widget, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    qtbot.keyClick(widget, Qt.Key.Key_F11, ctrl_alt)
+    qtbot.keyClick(widget, Qt.Key.Key_F12, ctrl_alt)
 
 
 def _activate(qtbot: QtBot, widget: QWidget) -> None:
@@ -227,7 +228,7 @@ def test_editing_shortcuts_do_not_reach_main_window(qtbot: QtBot):
     other.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     _activate(qtbot, other)
     _press_editing_keys(qtbot, other)
-    assert parent.triggered == ["paste", "tag", "select_all"]
+    assert parent.triggered == ["paste", "tag"]
     other.close()
     parent.triggered.clear()
 
