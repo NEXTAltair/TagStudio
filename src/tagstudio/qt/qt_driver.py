@@ -58,6 +58,7 @@ from tagstudio.core.utils.module_status import ModuleStatus
 from tagstudio.core.utils.ripgrep_status import RipgrepStatus
 from tagstudio.core.utils.str_formatting import is_version_outdated
 from tagstudio.core.utils.types import unwrap
+from tagstudio.core.viewer.formats import is_viewable
 from tagstudio.i18n.platform_strings import trash_term
 from tagstudio.i18n.translations import Translations
 from tagstudio.qt.app_settings import DEFAULT_GLOBAL_SETTINGS_PATH, AppSettings, Theme
@@ -888,6 +889,15 @@ class QtDriver(DriverMixin, QObject):
         result = self.image_viewer.open(self.lib, self.frame_content, self.last_selected)
         if result == OpenResult.NO_IMAGES:
             self.main_window.status_bar.showMessage(Translations["status.image_viewer.no_images"])
+
+    def open_image_viewer_at(self, entry_id: int) -> None:
+        """Open the image viewer for the current results, at the given entry if it's an image."""
+        entry = self.lib.get_entry(entry_id)
+        if entry is None or not is_viewable(entry.path):
+            return
+        if self.image_viewer is None:
+            self.image_viewer = ImageViewerManager(self.main_window)
+        self.image_viewer.open(self.lib, self.frame_content, entry_id)
 
     def backup_library(self):
         logger.info("Backing Up Library...")

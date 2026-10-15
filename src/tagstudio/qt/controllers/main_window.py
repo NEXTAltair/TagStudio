@@ -355,16 +355,6 @@ class MainMenuBar(QMenuBar):
         self.view_menu.addSeparator()
 
         self.open_image_viewer_action = QAction(Translations["menu.view.open_image_viewer"], self)
-        self.open_image_viewer_action.setShortcut(
-            QtCore.QKeyCombination(
-                QtCore.Qt.KeyboardModifier(
-                    QtCore.Qt.KeyboardModifier.ControlModifier
-                    | QtCore.Qt.KeyboardModifier.ShiftModifier
-                ),
-                QtCore.Qt.Key.Key_V,
-            )
-        )
-        self.open_image_viewer_action.setToolTip("Ctrl+Shift+V")
         self.open_image_viewer_action.setEnabled(False)
         self.view_menu.addAction(self.open_image_viewer_action)
 

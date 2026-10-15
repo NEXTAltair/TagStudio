@@ -321,9 +321,11 @@ def test_clear(viewer: ImageViewer):
 
 
 @pytest.fixture
-def canvas(qtbot: QtBot) -> ImageCanvas:
+def canvas(qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> ImageCanvas:
     c = ImageCanvas()
     qtbot.addWidget(c)
+    # Sizes below are in device pixels at a ratio of 1, whatever the test screen's scaling is.
+    monkeypatch.setattr(c, "devicePixelRatioF", lambda: 1.0)
     c.resize(400, 300)
     c.show()
     qtbot.waitExposed(c)
@@ -394,7 +396,7 @@ def test_canvas_paints_all_modes(canvas: ImageCanvas, mode: str, expected: int |
     canvas.set_image(_image(30, 20, mode))
     pixmap = canvas.grab()
     assert not pixmap.isNull()
-    center = pixmap.toImage().pixelColor(200, 150)
+    center = pixmap.toImage().pixelColor(pixmap.width() // 2, pixmap.height() // 2)
     if expected is None:
         # Half transparent: blended with the checkerboard, not with a baked-in background.
         assert center.red() != 128
