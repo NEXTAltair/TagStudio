@@ -366,6 +366,43 @@ def test_file_replaced_while_decoding(tmp_path: Path, monkeypatch: pytest.Monkey
     _fail(decode_image(DecodeRequest(path, (100, 100))), DecodeErrorKind.CHANGED)
 
 
+def test_file_replaced_while_decoder_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A decode that fails because the file is being replaced reports CHANGED, not CORRUPT."""
+    path = tmp_path / "a.png"
+    Image.new("RGB", (10, 10), RED).save(path)
+
+    def replace_then_fail(*args, **kwargs):  # pyright: ignore
+        replacement = tmp_path / "new.png"
+        Image.new("RGB", (20, 10), BLUE).save(replacement)
+        replacement.replace(path)
+        raise OSError("truncated")
+
+    monkeypatch.setitem(
+        decoding._DECODERS,  # pyright: ignore[reportPrivateUsage]
+        decoding.ViewerCodec.PILLOW,
+        replace_then_fail,
+    )
+    _fail(decode_image(DecodeRequest(path, (100, 100))), DecodeErrorKind.CHANGED)
+
+
+def test_i16_is_resized_without_i16_resampling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Pillow < 11 can't resample I;16 images; they're converted to I first."""
+    real_resize = Image.Image.resize
+
+    def resize_like_pillow_10(self: Image.Image, *args, **kwargs):  # pyright: ignore
+        if self.mode.startswith("I;16"):
+            raise ValueError("image has wrong mode")
+        return real_resize(self, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "resize", resize_like_pillow_10)
+    for value, expected in ((0x8000, 0x80), (200, 0)):  # Dark 16-bit samples stay dark
+        path = tmp_path / f"{value}.png"
+        Image.fromarray(np.full((40, 40), value, dtype=np.uint16)).save(path)
+        image = _ok(decode_image(DecodeRequest(path, (20, 20))))
+        assert (image.width, image.height, image.mode) == (20, 20, "L")
+        assert _pixel(image, 10, 10) == (expected,)
+
+
 def test_cancel(tmp_path: Path):
     path = tmp_path / "a.png"
     Image.new("RGB", (10, 10)).save(path)

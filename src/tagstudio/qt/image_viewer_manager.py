@@ -394,6 +394,8 @@ class ImageViewerManager(QObject):
     def _show_image(self, key: LoadKey, image: DecodedImage) -> None:
         assert self._viewer is not None
         self._shown_image = key.image
+        # A later change of the file (e.g. saved again) may be retried once more.
+        self._retried_change = False
         self._viewer.show_image(image)
 
     def _log_failure(self, failure: DecodeFailure) -> None:

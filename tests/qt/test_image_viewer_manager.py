@@ -622,6 +622,47 @@ def test_failed_larger_decode_keeps_smaller_image(
     assert viewer.canvas.message == ""
 
 
+def test_file_changes_are_retried_again_after_a_successful_load(
+    qtbot: QtBot,
+    library,  # pyright: ignore
+):
+    """Each change of the file gets its own retry, not one per entry."""
+    lib, _ = library
+    Image.new("RGB", (3000, 2000), (1, 2, 3)).save(lib.library_dir / "big.png")
+    big_id = lib.add_entries([Entry(path=Path("big.png"), fields=[])])[0]
+    calls = 0
+
+    def changed_on_first_and_third(
+        request: DecodeRequest, cancel: CancelCheck | None
+    ) -> DecodeOutcome:
+        nonlocal calls
+        calls += 1
+        if calls in (1, 3):
+            return DecodeFailure(DecodeErrorKind.CHANGED, request.path, "File changed")
+        return decode_image(request, cancel)
+
+    parent = QWidget()
+    qtbot.addWidget(parent)
+    m = ImageViewerManager(parent, runner=ImageDecodeRunner(changed_on_first_and_third))
+    try:
+        m.open(lib, [big_id], start_id=big_id)
+        viewer = m.viewer
+        assert viewer is not None
+        viewer.resize(400, 300)
+        qtbot.waitUntil(lambda: calls >= 2 and m.scheduler.is_idle, timeout=TIMEOUT_MS)
+        qtbot.waitUntil(lambda: viewer.canvas.image is not None, timeout=TIMEOUT_MS)
+        small_width = viewer.canvas.image.width  # pyright: ignore[reportOptionalMemberAccess]
+
+        viewer.resize(1200, 900)  # Needs a larger decode; the file "changes" again
+        qtbot.waitUntil(
+            lambda: viewer.canvas.image is not None and viewer.canvas.image.width > small_width,
+            timeout=TIMEOUT_MS,
+        )
+        assert calls == 4
+    finally:
+        m.shutdown()
+
+
 def test_shutdown_does_not_wait_for_decode(
     qtbot: QtBot,
     manager: ImageViewerManager,

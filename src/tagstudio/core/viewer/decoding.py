@@ -259,11 +259,15 @@ def _is_high_bit_depth(mode: str) -> bool:
     return mode in ("I", "F") or mode.startswith("I;16")
 
 
-def _normalize_mode(im: Image.Image) -> Image.Image:
+def _normalize_mode(im: Image.Image, sixteen_bit: bool = False) -> Image.Image:
     """Convert an image to L, RGB or RGBA without discarding transparency.
 
     High bit depth images (I, I;16, F) should be resized to the output size first: their
     conversion uses temporary arrays of up to `HIGH_BIT_DEPTH_BYTES_PER_PIXEL` per pixel.
+
+    Args:
+        im: The image to convert.
+        sixteen_bit: Whether an "I" image holds 16-bit samples (it was converted from I;16).
     """
     mode = im.mode
     if mode in ("L", "RGB") and "transparency" in im.info:
@@ -284,7 +288,7 @@ def _normalize_mode(im: Image.Image) -> Image.Image:
         return Image.fromarray(arr.astype(np.uint8))
     if mode == "I":
         arr = np.array(im)
-        if arr.max(initial=0) > 255:
+        if sixteen_bit or arr.max(initial=0) > 255:
             np.clip(arr, 0, 65535, out=arr)
             arr >>= 8
         np.clip(arr, 0, 255, out=arr)
@@ -330,15 +334,19 @@ def _finish(
     # High bit depth images are resized first, so their conversion works on the smaller image.
     # Other modes are normalized first (e.g. palettes and color keys can't be resampled).
     high_bit_depth = _is_high_bit_depth(im.mode)
+    sixteen_bit = im.mode.startswith("I;16")
     if not high_bit_depth:
         im = _normalize_mode(im)
     _check_cancel(cancel)
     if im.size != decode_size:
-        # NOTE: Pillow's reduce() step (used with reducing_gap) doesn't support I;16 images.
+        if sixteen_bit:
+            # Pillow < 11 can't resample I;16 images, and its reduce() step (used with
+            # reducing_gap) doesn't support them either.
+            im = im.convert("I")
         gap = None if high_bit_depth else 3.0
         im = im.resize(decode_size, Image.Resampling.LANCZOS, reducing_gap=gap)
     if high_bit_depth:
-        im = _normalize_mode(im)
+        im = _normalize_mode(im, sixteen_bit=sixteen_bit)
     if (transpose := _ORIENTATION_TRANSPOSE.get(orientation)) is not None:
         im = im.transpose(transpose)
     im = _drop_opaque_alpha(im)
@@ -556,20 +564,31 @@ def decode_image(request: DecodeRequest, cancel: CancelCheck | None = None) -> D
     if request.expected_version is not None and version != request.expected_version:
         return DecodeFailure(DecodeErrorKind.CHANGED, path, "File changed")
 
+    outcome = _decode_file(codec, request, version, cancel)
+    # The file may have been replaced (e.g. saved by an editor) while it was being decoded,
+    # which can also make the decode fail. Either way, the result is for an older version.
+    canceled = isinstance(outcome, DecodeFailure) and outcome.kind == DecodeErrorKind.CANCELED
+    if not canceled and FileVersion.of(path) != version:
+        return DecodeFailure(DecodeErrorKind.CHANGED, path, "File changed while decoding")
+    return outcome
+
+
+def _decode_file(
+    codec: ViewerCodec,
+    request: DecodeRequest,
+    version: FileVersion,
+    cancel: CancelCheck | None,
+) -> DecodeOutcome:
+    path = request.path
     try:
         _check_cancel(cancel)
         if compressed_inner_ext(path) is None:
-            image = _DECODERS[codec](path, request, version, cancel)
-        else:
-            with decompressed(path) as inner_path:
-                if inner_path is None:
-                    raise _DecodeError(DecodeErrorKind.CORRUPT, "Could not decompress file")
-                # Everything is decoded inside the context, before the temporary file is removed.
-                image = _DECODERS[codec](inner_path, request, version, cancel)
-        # The file may have been replaced (e.g. saved by an editor) while it was being decoded.
-        if FileVersion.of(path) != version:
-            return DecodeFailure(DecodeErrorKind.CHANGED, path, "File changed while decoding")
-        return image
+            return _DECODERS[codec](path, request, version, cancel)
+        with decompressed(path) as inner_path:
+            if inner_path is None:
+                raise _DecodeError(DecodeErrorKind.CORRUPT, "Could not decompress file")
+            # Everything is decoded inside the context, before the temporary file is removed.
+            return _DECODERS[codec](inner_path, request, version, cancel)
     except _DecodeError as e:
         return DecodeFailure(e.kind, path, e.message)
     except FileNotFoundError as e:
