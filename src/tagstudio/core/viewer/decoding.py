@@ -41,6 +41,9 @@ DEFAULT_MAX_DECODE_BYTES: int = 512 * MiB
 MAX_TARGET_SIDE: int = 16384
 """The largest output width or height, regardless of the requested target size."""
 
+HIGH_BIT_DEPTH_BYTES_PER_PIXEL: int = 12
+"""Upper bound of the temporary arrays used to convert I, I;16 and F images to 8 bits."""
+
 OutputMode = Literal["L", "RGB", "RGBA"]
 
 CancelCheck = Callable[[], bool]
@@ -248,9 +251,20 @@ def _check_budget(nbytes: int, budget: int, what: str) -> None:
         )
 
 
+def _is_high_bit_depth(mode: str) -> bool:
+    return mode in ("I", "F") or mode.startswith("I;16")
+
+
 def _normalize_mode(im: Image.Image) -> Image.Image:
-    """Convert an image to L, RGB or RGBA without discarding transparency."""
+    """Convert an image to L, RGB or RGBA without discarding transparency.
+
+    High bit depth images (I, I;16, F) should be resized to the output size first: their
+    conversion uses temporary arrays of up to `HIGH_BIT_DEPTH_BYTES_PER_PIXEL` per pixel.
+    """
     mode = im.mode
+    if mode in ("L", "RGB") and "transparency" in im.info:
+        # A tRNS color key: the pixels with that value are transparent.
+        return im.convert("RGBA")
     if mode in ("L", "RGB", "RGBA"):
         return im
     if mode in ("LA", "PA", "RGBa", "La"):
@@ -261,20 +275,31 @@ def _normalize_mode(im: Image.Image) -> Image.Image:
         return im.convert("L")
     if mode.startswith("I;16"):
         # Scale 16-bit samples down to 8 bits instead of clipping them.
-        return Image.fromarray((np.asarray(im) >> 8).astype(np.uint8))
+        arr = np.array(im)
+        arr >>= 8
+        return Image.fromarray(arr.astype(np.uint8))
     if mode == "I":
-        arr = np.asarray(im)
+        arr = np.array(im)
         if arr.max(initial=0) > 255:
-            arr = np.clip(arr, 0, 65535) >> 8
-        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+            np.clip(arr, 0, 65535, out=arr)
+            arr >>= 8
+        np.clip(arr, 0, 255, out=arr)
+        return Image.fromarray(arr.astype(np.uint8))
     if mode == "F":
-        # Stretch the actual range of finite samples to 0-255.
-        arr = np.asarray(im, dtype=np.float32)
-        finite = arr[np.isfinite(arr)]
-        lo, hi = (float(finite.min()), float(finite.max())) if finite.size else (0.0, 0.0)
+        # Stretch the actual range of finite samples to 0-255, working in place.
+        arr = np.array(im, dtype=np.float32)
+        finite = np.isfinite(arr)
+        lo = float(np.min(arr, where=finite, initial=np.inf))
+        hi = float(np.max(arr, where=finite, initial=-np.inf))
+        del finite
+        if lo > hi:  # No finite samples
+            lo = hi = 0.0
         scale = 255.0 / (hi - lo) if hi > lo else 0.0
-        scaled = np.nan_to_num((arr - lo) * scale, nan=0.0, posinf=255.0, neginf=0.0)
-        return Image.fromarray(np.clip(scaled, 0, 255).astype(np.uint8))
+        arr -= lo
+        arr *= scale
+        np.nan_to_num(arr, copy=False, nan=0.0, posinf=255.0, neginf=0.0)
+        np.clip(arr, 0, 255, out=arr)
+        return Image.fromarray(arr.astype(np.uint8))
     # CMYK, YCbCr, LAB, HSV, etc. NOTE: Embedded ICC profiles are not applied.
     return im.convert("RGB")
 
@@ -298,10 +323,18 @@ def _finish(
     cancel: CancelCheck | None,
 ) -> DecodedImage:
     """Normalize, resize, orient and copy an already loaded image into a DecodedImage."""
-    im = _normalize_mode(im)
+    # High bit depth images are resized first, so their conversion works on the smaller image.
+    # Other modes are normalized first (e.g. palettes and color keys can't be resampled).
+    high_bit_depth = _is_high_bit_depth(im.mode)
+    if not high_bit_depth:
+        im = _normalize_mode(im)
     _check_cancel(cancel)
     if im.size != decode_size:
-        im = im.resize(decode_size, Image.Resampling.LANCZOS, reducing_gap=3.0)
+        # NOTE: Pillow's reduce() step (used with reducing_gap) doesn't support I;16 images.
+        gap = None if high_bit_depth else 3.0
+        im = im.resize(decode_size, Image.Resampling.LANCZOS, reducing_gap=gap)
+    if high_bit_depth:
+        im = _normalize_mode(im)
     if (transpose := _ORIENTATION_TRANSPOSE.get(orientation)) is not None:
         im = im.transpose(transpose)
     im = _drop_opaque_alpha(im)
@@ -382,8 +415,12 @@ def _decode_opened_pillow(
 
     bpp = _PILLOW_BYTES_PER_PIXEL.get(im.mode, 4)
     loaded_pixels = im.size[0] * im.size[1]
-    # Estimate the loaded buffer, plus a 32-bit copy for mode conversion or resampling.
-    _check_budget(loaded_pixels * (bpp + 4), request.max_decode_bytes, "Decoding this image")
+    # Estimate the loaded buffer, plus a 32-bit copy for mode conversion or resampling, plus
+    # the conversion arrays of high bit depth images (which are made at the output size).
+    estimate = loaded_pixels * (bpp + 4)
+    if _is_high_bit_depth(im.mode):
+        estimate += out[0] * out[1] * HIGH_BIT_DEPTH_BYTES_PER_PIXEL
+    _check_budget(estimate, request.max_decode_bytes, "Decoding this image")
     _check_cancel(cancel)
 
     im.load()

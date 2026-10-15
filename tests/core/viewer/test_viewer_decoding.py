@@ -4,6 +4,7 @@
 
 import subprocess
 import sys
+import tracemalloc
 from compression import gzip
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,6 +191,47 @@ def test_float_image_with_non_finite_samples(tmp_path: Path):
     image = _ok(decode_image(DecodeRequest(path, (100, 100))))
     assert _pixel(image, 2, 0) == (255,)
     assert _pixel(image, 3, 3) == (0,)
+
+
+@pytest.mark.parametrize(["mode", "color", "key"], [("RGB", (0, 0, 0), (0, 0, 0)), ("L", 7, 7)])
+def test_color_key_transparency(tmp_path: Path, mode: str, color: object, key: object):
+    path = tmp_path / "a.png"
+    im = Image.new(mode, (4, 4), color)  # pyright: ignore[reportArgumentType]
+    im.putpixel((1, 1), 255 if mode == "L" else (255, 0, 0))
+    im.save(path, transparency=key)
+    image = _ok(decode_image(DecodeRequest(path, (100, 100))))
+    assert image.mode == "RGBA"
+    assert _pixel(image, 0, 0)[3] == 0
+    assert _pixel(image, 1, 1)[3] == 255
+
+
+@pytest.mark.parametrize("mode", ["F", "I", "I;16"])
+def test_high_bit_depth_is_converted_at_output_size(tmp_path: Path, mode: str):
+    """The conversion arrays are made after resizing, so they don't scale with the source."""
+    path = tmp_path / "a.tif"
+    dtype = {"F": np.float32, "I": np.int32, "I;16": np.uint16}[mode]
+    Image.fromarray(np.full((2000, 2000), 1000, dtype=dtype)).save(path)
+
+    tracemalloc.start()
+    try:
+        image = _ok(decode_image(DecodeRequest(path, (200, 200))))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert (image.width, image.height, image.mode) == (200, 200, "L")
+    # numpy arrays for the full 2000x2000 image would take at least 4 MB.
+    assert peak < 2_000_000
+
+
+def test_high_bit_depth_budget_includes_conversion(tmp_path: Path):
+    path = tmp_path / "a.tif"
+    Image.fromarray(np.zeros((1000, 1000), dtype=np.float32)).save(path)
+    loaded = 1000 * 1000 * (4 + 4)
+    conversion = 1000 * 1000 * decoding.HIGH_BIT_DEPTH_BYTES_PER_PIXEL
+    too_small = DecodeRequest(path, (1000, 1000), max_decode_bytes=loaded + conversion - 1)
+    _fail(decode_image(too_small), DecodeErrorKind.OVER_BUDGET)
+    enough = DecodeRequest(path, (1000, 1000), max_decode_bytes=loaded + conversion)
+    _ok(decode_image(enough))
 
 
 def test_animated_image_shows_first_frame(tmp_path: Path):
