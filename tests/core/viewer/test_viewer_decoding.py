@@ -227,10 +227,12 @@ def test_high_bit_depth_budget_includes_conversion(tmp_path: Path):
     path = tmp_path / "a.tif"
     Image.fromarray(np.zeros((1000, 1000), dtype=np.float32)).save(path)
     loaded = 1000 * 1000 * (4 + 4)
+    output = 1000 * 1000 * decoding.OUTPUT_BYTES_PER_PIXEL
     conversion = 1000 * 1000 * decoding.HIGH_BIT_DEPTH_BYTES_PER_PIXEL
-    too_small = DecodeRequest(path, (1000, 1000), max_decode_bytes=loaded + conversion - 1)
+    budget = loaded + output + conversion
+    too_small = DecodeRequest(path, (1000, 1000), max_decode_bytes=budget - 1)
     _fail(decode_image(too_small), DecodeErrorKind.OVER_BUDGET)
-    enough = DecodeRequest(path, (1000, 1000), max_decode_bytes=loaded + conversion)
+    enough = DecodeRequest(path, (1000, 1000), max_decode_bytes=budget)
     _ok(decode_image(enough))
 
 
@@ -305,11 +307,33 @@ def test_over_budget(tmp_path: Path):
     _fail(decode_image(request), DecodeErrorKind.OVER_BUDGET)
 
 
+def test_budget_includes_output_buffers(tmp_path: Path):
+    """A palette image expanded to RGBA needs its loaded, converted and output buffers."""
+    path = tmp_path / "a.png"
+    im = Image.new("P", (1000, 1000), 1)
+    im.putpalette([0, 0, 0, 255, 0, 0] + [0] * 762)
+    im.save(path, transparency=0)
+    loaded = 1000 * 1000 * (1 + 4)
+    output = 1000 * 1000 * decoding.OUTPUT_BYTES_PER_PIXEL
+    too_small = DecodeRequest(path, (1000, 1000), max_decode_bytes=loaded + output - 1)
+    _fail(decode_image(too_small), DecodeErrorKind.OVER_BUDGET)
+    _ok(decode_image(DecodeRequest(path, (1000, 1000), max_decode_bytes=loaded + output)))
+
+
+def test_avif_without_pillow_plugin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    path = tmp_path / "a.avif"
+    path.write_bytes(b"not decoded")
+    Image.init()
+    monkeypatch.delitem(Image.OPEN, "AVIF", raising=False)
+    _fail(decode_image(DecodeRequest(path, (10, 10))), DecodeErrorKind.CODEC_UNAVAILABLE)
+
+
 def test_jpeg_reduced_decoding_fits_budget(tmp_path: Path):
     """JPEG can be decoded at a reduced scale, so a large JPEG fits a small budget."""
     path = tmp_path / "a.jpg"
     Image.new("RGB", (4000, 4000), RED).save(path)
-    request = DecodeRequest(path, (500, 500), max_decode_bytes=4_000_000)
+    # A full-size decode would need over 128 MB; the 1/8 scale decode needs about 5 MB.
+    request = DecodeRequest(path, (500, 500), max_decode_bytes=6_000_000)
     image = _ok(decode_image(request))
     assert (image.width, image.height) == (500, 500)
     assert (image.source_width, image.source_height) == (4000, 4000)

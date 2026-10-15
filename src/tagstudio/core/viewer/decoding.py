@@ -44,6 +44,10 @@ MAX_TARGET_SIDE: int = 16384
 HIGH_BIT_DEPTH_BYTES_PER_PIXEL: int = 12
 """Upper bound of the temporary arrays used to convert I, I;16 and F images to 8 bits."""
 
+OUTPUT_BYTES_PER_PIXEL: int = 12
+"""Upper bound of the output sized buffers alive at once while finishing a decode: the resized
+32-bit image, a transposed or converted copy of it, and the returned bytes."""
+
 OutputMode = Literal["L", "RGB", "RGBA"]
 
 CancelCheck = Callable[[], bool]
@@ -368,12 +372,16 @@ def _decode_size(
 
 def _pillow_formats(path: Path) -> list[str]:
     """Return the Pillow plugins that may open a file, loading the JPEG XL plugin if needed."""
-    if viewer_ext(path) == ".jxl":
+    ext = viewer_ext(path)
+    if ext == ".jxl":
         try:
             import pillow_jxl  # noqa: F401 # pyright: ignore[reportUnusedImport]
         except ImportError as e:
             raise _DecodeError(DecodeErrorKind.CODEC_UNAVAILABLE, str(e)) from e
     Image.init()
+    if ext == ".avif" and "AVIF" not in Image.OPEN:
+        # Pillow only reads AVIF natively since 11.2, and pillow-heif has no AVIF decoder.
+        raise _DecodeError(DecodeErrorKind.CODEC_UNAVAILABLE, "Pillow has no AVIF plugin")
     return [f for f in PILLOW_FORMATS if f in Image.OPEN]
 
 
@@ -416,8 +424,9 @@ def _decode_opened_pillow(
     bpp = _PILLOW_BYTES_PER_PIXEL.get(im.mode, 4)
     loaded_pixels = im.size[0] * im.size[1]
     # Estimate the loaded buffer, plus a 32-bit copy for mode conversion or resampling, plus
-    # the conversion arrays of high bit depth images (which are made at the output size).
-    estimate = loaded_pixels * (bpp + 4)
+    # the output sized buffers, plus the conversion arrays of high bit depth images (which are
+    # made at the output size).
+    estimate = loaded_pixels * (bpp + 4) + out[0] * out[1] * OUTPUT_BYTES_PER_PIXEL
     if _is_high_bit_depth(im.mode):
         estimate += out[0] * out[1] * HIGH_BIT_DEPTH_BYTES_PER_PIXEL
     _check_budget(estimate, request.max_decode_bytes, "Decoding this image")
@@ -445,8 +454,11 @@ def _decode_heif(
     # so EXIF orientation is not applied a second time.
     stored_size: tuple[int, int] = tuple(heif_file.size)  # pyright: ignore[reportAssignmentType]
     oriented, out = _decode_size(stored_size, 1, request)
+    # libheif's decoded buffer and its Pillow copy, plus the output sized buffers.
     _check_budget(
-        stored_size[0] * stored_size[1] * 8, request.max_decode_bytes, "Decoding this image"
+        stored_size[0] * stored_size[1] * 8 + out[0] * out[1] * OUTPUT_BYTES_PER_PIXEL,
+        request.max_decode_bytes,
+        "Decoding this image",
     )
     _check_cancel(cancel)
     try:
@@ -480,9 +492,13 @@ def _decode_raw(
             work_w, work_h = int(sizes.iwidth), int(sizes.iheight)
             if half_size and work_w >= full[0] and work_h >= full[1]:
                 work_w, work_h = (work_w + 1) // 2, (work_h + 1) // 2
-            # LibRaw's working image (4 x 16-bit per pixel) plus the 8-bit RGB output.
+            # LibRaw's working image (4 x 16-bit per pixel) with its 8-bit RGB output, or that
+            # output with its 32-bit Pillow copy, whichever is larger; plus the output sized
+            # buffers.
+            developed = (work_w * work_h) if half_size else oriented[0] * oriented[1]
             _check_budget(
-                work_w * work_h * 8 + oriented[0] * oriented[1] * 3,
+                max(work_w * work_h * 8 + developed * 3, developed * 7)
+                + out_oriented[0] * out_oriented[1] * OUTPUT_BYTES_PER_PIXEL,
                 request.max_decode_bytes,
                 "Developing this RAW image",
             )
