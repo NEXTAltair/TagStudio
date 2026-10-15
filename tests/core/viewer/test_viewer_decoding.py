@@ -171,6 +171,27 @@ def test_16_bit_grayscale_is_scaled(tmp_path: Path):
     assert _pixel(image, 1, 1) == (0x80,)
 
 
+@pytest.mark.parametrize(["low", "high"], [(100.0, 200.0), (-200.0, -100.0), (0.0, 1.0)])
+def test_float_image_uses_its_own_range(tmp_path: Path, low: float, high: float):
+    path = tmp_path / "a.tif"
+    arr = np.linspace(low, high, 64, dtype=np.float32).reshape(8, 8)
+    Image.fromarray(arr).save(path)
+    image = _ok(decode_image(DecodeRequest(path, (100, 100))))
+    assert image.mode == "L"
+    assert min(image.data) == 0
+    assert max(image.data) == 255
+
+
+def test_float_image_with_non_finite_samples(tmp_path: Path):
+    path = tmp_path / "a.tif"
+    arr = np.full((4, 4), 5.0, dtype=np.float32)
+    arr[0, 0], arr[0, 1], arr[0, 2] = np.nan, np.inf, 10.0
+    Image.fromarray(arr).save(path)
+    image = _ok(decode_image(DecodeRequest(path, (100, 100))))
+    assert _pixel(image, 2, 0) == (255,)
+    assert _pixel(image, 3, 3) == (0,)
+
+
 def test_animated_image_shows_first_frame(tmp_path: Path):
     path = tmp_path / "a.gif"
     frames = [Image.new("RGB", (10, 10), c) for c in (RED, BLUE)]

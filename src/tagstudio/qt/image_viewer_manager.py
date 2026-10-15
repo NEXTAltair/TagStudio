@@ -136,12 +136,14 @@ class ImageViewerManager(QObject):
 
         Only entries whose file type the viewer supports are included. If `start_id` isn't
         viewable, the closest following (or else preceding) viewable entry is shown. Calling
-        this while the viewer is open replaces its session.
+        this while the viewer is open replaces its session; if there is nothing to show, the
+        open viewer is closed.
         """
         self._end_session()
         try:
             reader = LibraryReader(library)
         except LibraryUnavailableError:
+            self.close()
             return OpenResult.NO_LIBRARY
 
         snapshot = tuple(entry_ids)
@@ -149,6 +151,8 @@ class ImageViewerManager(QObject):
         session = ViewerSession.from_snapshot(snapshot, viewable, start_id)
         if session.count == 0:
             reader.close()
+            # Don't leave an already open viewer on screen without a session.
+            self.close()
             return OpenResult.NO_IMAGES
 
         self._reader = reader

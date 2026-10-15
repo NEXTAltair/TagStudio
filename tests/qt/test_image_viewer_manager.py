@@ -169,6 +169,21 @@ def test_no_viewable_entries(manager: ImageViewerManager, library):  # pyright: 
     assert manager.viewer is None or not manager.viewer.isVisible()
 
 
+def test_reopening_without_images_closes_open_viewer(
+    qtbot: QtBot,
+    manager: ImageViewerManager,
+    library,  # pyright: ignore
+):
+    lib, ids = library
+    manager.open(lib, ids, start_id=ids[0])
+    viewer = manager.viewer
+    assert viewer is not None and viewer.isVisible()
+
+    assert manager.open(lib, [ids[1]], start_id=ids[1]) == OpenResult.NO_IMAGES
+    assert not viewer.isVisible()
+    assert not manager.is_open
+
+
 def test_no_library(manager: ImageViewerManager):
     assert manager.open(Library(), [1, 2], start_id=1) == OpenResult.NO_LIBRARY
 

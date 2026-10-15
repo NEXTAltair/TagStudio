@@ -268,10 +268,13 @@ def _normalize_mode(im: Image.Image) -> Image.Image:
             arr = np.clip(arr, 0, 65535) >> 8
         return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
     if mode == "F":
+        # Stretch the actual range of finite samples to 0-255.
         arr = np.asarray(im, dtype=np.float32)
-        lo, hi = float(arr.min(initial=0)), float(arr.max(initial=0))
+        finite = arr[np.isfinite(arr)]
+        lo, hi = (float(finite.min()), float(finite.max())) if finite.size else (0.0, 0.0)
         scale = 255.0 / (hi - lo) if hi > lo else 0.0
-        return Image.fromarray(((arr - lo) * scale).astype(np.uint8))
+        scaled = np.nan_to_num((arr - lo) * scale, nan=0.0, posinf=255.0, neginf=0.0)
+        return Image.fromarray(np.clip(scaled, 0, 255).astype(np.uint8))
     # CMYK, YCbCr, LAB, HSV, etc. NOTE: Embedded ICC profiles are not applied.
     return im.convert("RGB")
 
