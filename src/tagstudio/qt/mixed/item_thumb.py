@@ -306,6 +306,7 @@ class ItemThumb(FlowWidget):
         # If this behavior ever changes, move this method back to QtDriver.update_thumbs().
         self.thumb_button.pressed.connect(self._on_thumb_pressed)
         self.thumb_button.clicked.connect(self._on_thumb_clicked)
+        self.thumb_button.double_clicked.connect(self._on_thumb_double_clicked)
         self.set_mode(mode)
 
     @property
@@ -335,6 +336,9 @@ class ItemThumb(FlowWidget):
     def _on_thumb_clicked(self) -> None:
         if self._select_on_release:
             self.toggle_item_selection()
+
+    def _on_thumb_double_clicked(self) -> None:
+        self.driver.open_image_viewer_at(self.item_id)
 
     def set_mode(self, mode: ItemType | None) -> None:
         if mode is None:

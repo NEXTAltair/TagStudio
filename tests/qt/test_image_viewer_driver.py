@@ -134,3 +134,19 @@ def test_shutdown_shuts_down_viewer(driver: QtDriver, monkeypatch: pytest.Monkey
     driver.shutdown()
     assert viewer.runner.is_shut_down
     assert not viewer.is_open
+
+
+def test_open_at_starts_at_the_given_entry(qtbot: QtBot, driver: QtDriver, image_library):  # pyright: ignore
+    _, ids = image_library
+    driver.open_image_viewer_at(ids[1])
+    viewer = driver.image_viewer
+    assert viewer is not None and viewer.session is not None
+    assert viewer.session.current_id == ids[1]
+    assert viewer.session.entry_ids == (ids[0], ids[1], ids[3])
+
+
+def test_open_at_ignores_entries_that_are_not_images(driver: QtDriver, image_library):  # pyright: ignore
+    _, ids = image_library
+    driver.open_image_viewer_at(ids[2])  # c.txt
+    assert driver.image_viewer is not None
+    assert driver.image_viewer.session is None
