@@ -4,6 +4,7 @@
 
 import gc
 import threading
+import weakref
 from pathlib import Path
 
 import pytest
@@ -167,3 +168,22 @@ def test_nothing_is_emitted_after_shutdown(qtbot: QtBot, runner, image_path: Pat
         decode.release.set()
     r.start(2, DecodeRequest(image_path, (10, 10)))  # Ignored
     assert r.started_count == 1
+
+
+def test_worker_thread_does_not_keep_runner_alive(qtbot: QtBot, image_path: Path):
+    """The runner is destroyed on the GUI thread even while its worker is busy."""
+    decode = BlockingDecode()
+    r = ImageDecodeRunner(decode)
+    r.start(1, DecodeRequest(image_path, (10, 10)))
+    assert decode.started.wait(5)
+    thread = decode.threads[0]
+    ref = weakref.ref(r)
+
+    del r
+    gc.collect()
+    assert ref() is None  # Released here, not later by the worker thread
+
+    # The worker finishes its decode, drops the result, and ends.
+    decode.release.set()
+    thread.join(5)
+    assert not thread.is_alive()

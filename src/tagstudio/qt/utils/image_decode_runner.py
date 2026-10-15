@@ -3,8 +3,10 @@
 
 """Runs image viewer decodes off the GUI thread and reports results on it."""
 
+import functools
 import queue
 import threading
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -32,6 +34,62 @@ class _Job:
     cancel: threading.Event
 
 
+class _Dispatcher(QObject):
+    """Moves results from worker threads to the GUI thread.
+
+    One instance is created on the GUI thread and is never deleted, so a worker thread never
+    holds the last reference to a QObject (which would destroy it on the wrong thread).
+    """
+
+    delivered = Signal(object, int, object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.delivered.connect(self._deliver, Qt.ConnectionType.QueuedConnection)
+
+    def _deliver(
+        self,
+        runner_ref: weakref.ref[ImageDecodeRunner],
+        request_id: int,
+        outcome: DecodeOutcome,
+    ) -> None:
+        if (runner := runner_ref()) is not None:
+            runner._on_delivered(request_id, outcome)  # pyright: ignore[reportPrivateUsage]
+
+
+@functools.cache
+def _dispatcher() -> _Dispatcher:
+    return _Dispatcher()
+
+
+def _worker_loop(
+    jobs: queue.SimpleQueue[_Job | None],
+    decode: DecodeFunction,
+    runner_ref: weakref.ref[ImageDecodeRunner],
+    dispatcher: _Dispatcher,
+) -> None:
+    # NOTE: Only holds a weak reference to the runner; see `_Dispatcher`.
+    while (job := jobs.get()) is not None:
+        try:
+            outcome = decode(job.request, job.cancel.is_set)
+        except Exception as e:
+            logger.exception("[ImageDecodeRunner] Decoder raised", path=job.request.path)
+            outcome = DecodeFailure(
+                DecodeErrorKind.CORRUPT, job.request.path, f"{type(e).__name__}: {e}"
+            )
+        try:
+            dispatcher.delivered.emit(runner_ref, job.request_id, outcome)
+        except RuntimeError:
+            # Qt objects are being torn down because the application is exiting.
+            return
+
+
+def _stop_worker(jobs: queue.SimpleQueue[_Job | None], active: dict[int, threading.Event]) -> None:
+    for event in active.values():
+        event.set()
+    jobs.put(None)
+
+
 class ImageDecodeRunner(QObject):
     """Decodes images on a single background thread.
 
@@ -44,12 +102,14 @@ class ImageDecodeRunner(QObject):
           it still finishes and reports its result, which the receiver may still cache.
         - Results only contain immutable, self-owned buffers (`DecodedImage.data` is `bytes`).
           `QPixmap`s are created by the receiver on the GUI thread.
-        - After `shutdown()`, nothing is emitted. The worker is a daemon thread, so a decode
+        - After `shutdown()`, or once the runner is garbage collected, nothing is emitted and
+          the worker thread ends after its current decode. It is a daemon thread, so a decode
           that never returns can't keep the application from exiting.
+        - The worker thread never holds a strong reference to the runner, so the runner is
+          always destroyed on the thread that owns it.
     """
 
     finished = Signal(int, object)
-    _delivered = Signal(int, object)
 
     def __init__(self, decode: DecodeFunction = decode_image, parent: QObject | None = None):
         super().__init__(parent)
@@ -58,11 +118,11 @@ class ImageDecodeRunner(QObject):
         self._active: dict[int, threading.Event] = {}
         self._thread: threading.Thread | None = None
         self._shut_down = False
+        self._dispatcher = _dispatcher()
+        self._finalizer = weakref.finalize(self, _stop_worker, self._jobs, self._active)
         self.max_active = 0
         """The most requests that were outstanding at once (for tests and measurements)."""
         self.started_count = 0
-        # Emitted from the worker thread; queued so the slot always runs on this object's thread.
-        self._delivered.connect(self._on_delivered, Qt.ConnectionType.QueuedConnection)
 
     @property
     def active_count(self) -> int:
@@ -80,7 +140,10 @@ class ImageDecodeRunner(QObject):
             raise ValueError(f"Request {request_id} is already running")
         if self._thread is None:
             self._thread = threading.Thread(
-                target=self._run, name="ImageViewerDecoder", daemon=True
+                target=_worker_loop,
+                args=(self._jobs, self._decode, weakref.ref(self), self._dispatcher),
+                name="ImageViewerDecoder",
+                daemon=True,
             )
             self._thread.start()
         cancel = threading.Event()
@@ -102,26 +165,9 @@ class ImageDecodeRunner(QObject):
         if self._shut_down:
             return
         self._shut_down = True
-        for event in self._active.values():
-            event.set()
-        self._jobs.put(None)
+        self._finalizer()
         if self._thread is not None and timeout > 0:
             self._thread.join(timeout)
-
-    def _run(self) -> None:
-        while (job := self._jobs.get()) is not None:
-            try:
-                outcome = self._decode(job.request, job.cancel.is_set)
-            except Exception as e:
-                logger.exception("[ImageDecodeRunner] Decoder raised", path=job.request.path)
-                outcome = DecodeFailure(
-                    DecodeErrorKind.CORRUPT, job.request.path, f"{type(e).__name__}: {e}"
-                )
-            try:
-                self._delivered.emit(job.request_id, outcome)
-            except RuntimeError:
-                # The runner was deleted while the application is shutting down.
-                return
 
     def _on_delivered(self, request_id: int, outcome: DecodeOutcome) -> None:
         if self._active.pop(request_id, None) is None:
