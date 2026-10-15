@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 
+import html
 from typing import override
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
@@ -113,8 +114,9 @@ class ImageViewer(ImageViewerView):
         self.position_label.setText(self._position_text)
 
     def show_file_name(self, file_name: str) -> None:
+        # File names are shown literally, never interpreted as markup.
         self.name_label.setText(file_name)
-        self.name_label.setToolTip(file_name)
+        self.name_label.setToolTip(f"<p>{html.escape(file_name)}</p>" if file_name else "")
         self.setWindowTitle(
             Translations.format("image_viewer.window_title", file_name=file_name)
             if file_name

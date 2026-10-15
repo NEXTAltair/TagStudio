@@ -218,6 +218,7 @@ class ImageViewerView(QWidget):
         self.status_layout.setContentsMargins(8, 4, 8, 4)
         self.position_label = QLabel(self.status_widget)
         self.name_label = QLabel(self.status_widget)
+        self.name_label.setTextFormat(Qt.TextFormat.PlainText)
         self.name_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.details_label = QLabel(self.status_widget)

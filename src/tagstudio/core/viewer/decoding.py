@@ -559,12 +559,17 @@ def decode_image(request: DecodeRequest, cancel: CancelCheck | None = None) -> D
     try:
         _check_cancel(cancel)
         if compressed_inner_ext(path) is None:
-            return _DECODERS[codec](path, request, version, cancel)
-        with decompressed(path) as inner_path:
-            if inner_path is None:
-                raise _DecodeError(DecodeErrorKind.CORRUPT, "Could not decompress file")
-            # Everything is decoded inside the context, before the temporary file is removed.
-            return _DECODERS[codec](inner_path, request, version, cancel)
+            image = _DECODERS[codec](path, request, version, cancel)
+        else:
+            with decompressed(path) as inner_path:
+                if inner_path is None:
+                    raise _DecodeError(DecodeErrorKind.CORRUPT, "Could not decompress file")
+                # Everything is decoded inside the context, before the temporary file is removed.
+                image = _DECODERS[codec](inner_path, request, version, cancel)
+        # The file may have been replaced (e.g. saved by an editor) while it was being decoded.
+        if FileVersion.of(path) != version:
+            return DecodeFailure(DecodeErrorKind.CHANGED, path, "File changed while decoding")
+        return image
     except _DecodeError as e:
         return DecodeFailure(e.kind, path, e.message)
     except FileNotFoundError as e:

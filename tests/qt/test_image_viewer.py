@@ -285,6 +285,13 @@ def test_show_image_and_details(viewer: ImageViewer):
     assert viewer.canvas.image is not None
 
 
+def test_file_name_is_plain_text(viewer: ImageViewer):
+    viewer.show_file_name("<b>photo</b>.png")
+    assert viewer.name_label.textFormat() == Qt.TextFormat.PlainText
+    assert viewer.name_label.text() == "<b>photo</b>.png"
+    assert "&lt;b&gt;photo&lt;/b&gt;.png" in viewer.name_label.toolTip()
+
+
 def test_message_replaces_previous_image(viewer: ImageViewer):
     viewer.show_image(_image(40, 20))
     viewer.show_message("Loading")

@@ -346,6 +346,26 @@ def test_changed_file(tmp_path: Path):
     _fail(decode_image(DecodeRequest(path, (10, 10), stale)), DecodeErrorKind.CHANGED)
 
 
+def test_file_replaced_while_decoding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    path = tmp_path / "a.png"
+    Image.new("RGB", (10, 10), RED).save(path)
+    real_decode = decoding._DECODERS[decoding.ViewerCodec.PILLOW]  # pyright: ignore[reportPrivateUsage]
+
+    def decode_then_replace(*args, **kwargs):  # pyright: ignore
+        image = real_decode(*args, **kwargs)
+        replacement = tmp_path / "new.png"
+        Image.new("RGB", (20, 10), BLUE).save(replacement)
+        replacement.replace(path)  # Atomic replace, like many editors do
+        return image
+
+    monkeypatch.setitem(
+        decoding._DECODERS,  # pyright: ignore[reportPrivateUsage]
+        decoding.ViewerCodec.PILLOW,
+        decode_then_replace,
+    )
+    _fail(decode_image(DecodeRequest(path, (100, 100))), DecodeErrorKind.CHANGED)
+
+
 def test_cancel(tmp_path: Path):
     path = tmp_path / "a.png"
     Image.new("RGB", (10, 10)).save(path)
