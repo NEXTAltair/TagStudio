@@ -74,6 +74,7 @@ from tagstudio.qt.controllers.progress_bar import ProgressWidget
 from tagstudio.qt.controllers.splash import SplashScreen
 from tagstudio.qt.controllers.tag_search_panel import TagSearchPanel
 from tagstudio.qt.controllers.update_available_message_box import UpdateAvailableMessageBox
+from tagstudio.qt.image_viewer_manager import ImageViewerManager, OpenResult
 from tagstudio.qt.mixed.about_modal import AboutModal
 from tagstudio.qt.mixed.drop_import_modal import DropImportModal
 from tagstudio.qt.mixed.fix_dupe_files import FixDupeFilesModal
@@ -189,6 +190,7 @@ class QtDriver(DriverMixin, QObject):
 
     lib: Library
     cache_manager: CacheManager | None = None
+    image_viewer: ImageViewerManager | None = None
 
     browsing_history: History[BrowsingState]
 
@@ -550,6 +552,8 @@ class QtDriver(DriverMixin, QObject):
             on_increase_thumbnail_size_action
         )
 
+        self.main_window.menu_bar.open_image_viewer_action.triggered.connect(self.open_image_viewer)
+
         # endregion
 
         # region Tools Menu ===========================================================
@@ -785,6 +789,8 @@ class QtDriver(DriverMixin, QObject):
     def shutdown(self):
         """Save Library on Application Exit."""
         self.close_library(is_shutdown=True)
+        if self.image_viewer is not None:
+            self.image_viewer.shutdown()
         logger.info("[SHUTDOWN] Ending Thumbnail Threads...")
         for _ in self.thumb_threads:
             self.thumb_job_queue.put(Consumer.MARKER_QUIT)
@@ -816,6 +822,9 @@ class QtDriver(DriverMixin, QObject):
         scrollbar.verticalScrollBar().setValue(0)
         self.__reset_navigation()
 
+        # The image viewer must stop reading from the library before it's closed.
+        if self.image_viewer is not None:
+            self.image_viewer.close_library()
         self.lib.close()
         self.cache_manager = None
         self.thumb_job_queue.queue.clear()
@@ -855,6 +864,7 @@ class QtDriver(DriverMixin, QObject):
             self.main_window.menu_bar.clear_thumb_cache_action.setEnabled(False)
             self.main_window.menu_bar.folders_to_tags_action.setEnabled(False)
             self.main_window.menu_bar.library_info_action.setEnabled(False)
+            self.main_window.menu_bar.open_image_viewer_action.setEnabled(False)
         except AttributeError:
             logger.warning(
                 "[Library] Could not disable library management menu actions. Is this in a test?"
@@ -870,6 +880,14 @@ class QtDriver(DriverMixin, QObject):
                 "status.library_closed", time_span=format_timespan(end_time - start_time)
             )
         )
+
+    def open_image_viewer(self) -> None:
+        """Open the image viewer for the current results, at the last selected entry."""
+        if self.image_viewer is None:
+            self.image_viewer = ImageViewerManager(self.main_window)
+        result = self.image_viewer.open(self.lib, self.frame_content, self.last_selected)
+        if result == OpenResult.NO_IMAGES:
+            self.main_window.status_bar.showMessage(Translations["status.image_viewer.no_images"])
 
     def backup_library(self):
         logger.info("Backing Up Library...")
@@ -1749,6 +1767,7 @@ class QtDriver(DriverMixin, QObject):
         self.main_window.menu_bar.clear_thumb_cache_action.setEnabled(True)
         self.main_window.menu_bar.folders_to_tags_action.setEnabled(True)
         self.main_window.menu_bar.library_info_action.setEnabled(True)
+        self.main_window.menu_bar.open_image_viewer_action.setEnabled(True)
 
         self.main_window.preview_panel.set_selection(self.selected)
 
