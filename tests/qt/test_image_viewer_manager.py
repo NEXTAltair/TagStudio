@@ -23,6 +23,8 @@ from tagstudio.core.viewer.cache import ImageCache
 from tagstudio.core.viewer.decoding import (
     CancelCheck,
     DecodedImage,
+    DecodeErrorKind,
+    DecodeFailure,
     DecodeOutcome,
     DecodeRequest,
     decode_image,
@@ -315,8 +317,11 @@ def test_removed_entry(qtbot: QtBot, manager: ImageViewerManager, library):  # p
     manager.open(lib, ids, start_id=ids[0])
     _wait_for_entry(qtbot, manager, 0)
     lib.remove_entries([ids[2]])
-    manager.viewer.navigate.emit(1)  # pyright: ignore[reportOptionalMemberAccess]
-    assert manager.viewer.canvas.message == Translations["image_viewer.error.missing_entry"]  # pyright: ignore[reportOptionalMemberAccess]
+    viewer = manager.viewer
+    assert viewer is not None
+    viewer.navigate.emit(1)
+    assert viewer.canvas.message == Translations["image_viewer.error.missing_entry"]
+    assert viewer.name_label.text() == ""  # The previous file name isn't left on screen
 
 
 def test_corrupt_file(qtbot: QtBot, manager: ImageViewerManager, library):  # pyright: ignore
@@ -446,6 +451,44 @@ def test_resize_requests_larger_image(qtbot: QtBot, library, decode: GatedDecode
         assert (image.source_width, image.source_height) == (3000, 2000)
     finally:
         m.shutdown()
+
+
+def test_failed_larger_decode_keeps_smaller_image(
+    qtbot: QtBot,
+    manager: ImageViewerManager,
+    library,  # pyright: ignore
+    monkeypatch: pytest.MonkeyPatch,
+):
+    lib, ids = library
+    big = lib.library_dir / "big.jpg"
+    Image.new("RGB", (4000, 2000), (1, 2, 3)).save(big)
+    big_id = lib.add_entries([Entry(path=Path("big.jpg"), fields=[])])[0]
+    manager.open(lib, [big_id], start_id=big_id)
+    viewer = manager.viewer
+    assert viewer is not None
+    viewer.resize(400, 300)
+    qtbot.waitUntil(lambda: viewer.canvas.image is not None, timeout=TIMEOUT_MS)
+    qtbot.waitUntil(lambda: manager.scheduler.is_idle, timeout=TIMEOUT_MS)
+    small = viewer.canvas.image
+
+    # From now on, decodes larger than 1/8 scale don't fit the budget.
+    outcomes: list[DecodeOutcome] = []
+    manager.runner.finished.connect(lambda _id, outcome: outcomes.append(outcome))
+    real_init = DecodeRequest.__init__
+
+    def small_budget(self, *args, **kwargs):  # pyright: ignore
+        kwargs["max_decode_bytes"] = 4000 * 2000
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(DecodeRequest, "__init__", small_budget)
+    viewer.resize(1600, 1200)
+    qtbot.waitUntil(lambda: bool(outcomes) and manager.scheduler.is_idle, timeout=TIMEOUT_MS)
+
+    assert [o.kind for o in outcomes if isinstance(o, DecodeFailure)] == [
+        DecodeErrorKind.OVER_BUDGET
+    ]
+    assert viewer.canvas.image is small
+    assert viewer.canvas.message == ""
 
 
 def test_shutdown_does_not_wait_for_decode(

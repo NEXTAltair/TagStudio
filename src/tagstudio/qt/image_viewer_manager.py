@@ -96,6 +96,8 @@ class ImageViewerManager(QObject):
         self._reader: LibraryReader | None = None
         self._session: ViewerSession | None = None
         self._location: EntryLocation | None = None
+        self._shown_image: ImageKey | None = None
+        """The file version whose image is on screen, if any."""
         self._retried_change = False
 
         self._resize_timer = QTimer(self)
@@ -229,6 +231,7 @@ class ImageViewerManager(QObject):
             self._reader.close()
         self._reader = None
         self._location = None
+        self._shown_image = None
         self._cancel(self._scheduler.invalidate())
         if self._viewer is not None:
             self._viewer.clear()
@@ -280,6 +283,7 @@ class ImageViewerManager(QObject):
 
         self._location = location
         if location is None:
+            viewer.show_file_name("")
             self._show_message(Translations["image_viewer.error.missing_entry"])
             return
         viewer.show_file_name(location.path.name)
@@ -295,11 +299,11 @@ class ImageViewerManager(QObject):
         )
         if (cached := self._cache.get(key)) is not None:
             self._cancel(self._scheduler.satisfy())
-            viewer.show_image(cached)
+            self._show_image(key, cached)
             return
 
-        current = viewer.canvas.image
-        if not (same_entry and current is not None):
+        if not (same_entry and self._shown_image == key.image):
+            self._shown_image = None
             viewer.show_message(Translations["image_viewer.loading"])
         actions = self._scheduler.submit(key)
         self._cancel(actions.cancel)
@@ -308,6 +312,7 @@ class ImageViewerManager(QObject):
 
     def _show_message(self, message: str) -> None:
         self._cancel(self._scheduler.satisfy())
+        self._shown_image = None
         if self._viewer is not None:
             self._viewer.show_message(message)
 
@@ -320,7 +325,7 @@ class ImageViewerManager(QObject):
         assert isinstance(key, LoadKey)
         if (cached := self._cache.get(key)) is not None:
             # e.g. an earlier, superseded request for the same image finished in the meantime.
-            self._finish(request.request_id, cached)
+            self._finish(request, cached)
             return
         decode_request = DecodeRequest(
             path=key.image.path,
@@ -344,28 +349,43 @@ class ImageViewerManager(QObject):
             and key.image.library_token == reader.token
         ):
             self._cache.put(key, outcome)
-        self._finish(request_id, outcome)
+        self._finish(running, outcome)
 
-    def _finish(self, request_id: int, outcome: DecodeOutcome) -> None:
-        actions = self._scheduler.finish(request_id)
+    def _finish(self, request: LoadRequest, outcome: DecodeOutcome) -> None:
+        key = request.key
+        assert isinstance(key, LoadKey)
+        actions = self._scheduler.finish(request.request_id)
         if actions.apply and self._session is not None and self._viewer is not None:
             if isinstance(outcome, DecodedImage):
-                self._viewer.show_image(outcome)
+                self._show_image(key, outcome)
             elif outcome.kind == DecodeErrorKind.CHANGED and not self._retried_change:
                 # The file was modified after it was checked; check it again, once.
                 self._retried_change = True
                 QTimer.singleShot(0, lambda: self._show_current(same_entry=True))
+            elif self._shown_image == key.image and self._viewer.canvas.image is not None:
+                # A larger version of the image on screen failed (e.g. after enlarging the
+                # window); keep showing the smaller one.
+                self._log_failure(outcome)
             else:
                 self._show_failure(outcome)
         if actions.start is not None:
             self._start(actions.start)
 
-    def _show_failure(self, failure: DecodeFailure) -> None:
+    def _show_image(self, key: LoadKey, image: DecodedImage) -> None:
         assert self._viewer is not None
+        self._shown_image = key.image
+        self._viewer.show_image(image)
+
+    def _log_failure(self, failure: DecodeFailure) -> None:
         logger.info(
             "[ImageViewer] Could not show image",
             path=failure.path,
             kind=failure.kind.value,
             message=failure.message,
         )
+
+    def _show_failure(self, failure: DecodeFailure) -> None:
+        assert self._viewer is not None
+        self._log_failure(failure)
+        self._shown_image = None
         self._viewer.show_message(Translations[_ERROR_KEYS[failure.kind]])
