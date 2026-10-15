@@ -8,6 +8,7 @@ Decoders receive plain `Path` values and never see the library, sessions, or ORM
 """
 
 import itertools
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -15,13 +16,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import Connection, select
+from sqlalchemy import Connection, Engine, select
 
 from tagstudio.core.library.alchemy.models import Entry
 
 if TYPE_CHECKING:
-    from sqlalchemy import Engine
-
     from tagstudio.core.library.alchemy.library import Library
 
 logger = structlog.get_logger(__name__)
@@ -31,6 +30,8 @@ DEFAULT_CHUNK_SIZE: int = 500
 DEFAULT_PATH_CACHE_SIZE: int = 2048
 
 _token_counter = itertools.count(1)
+# Every opened library gets a new engine, so the engine identifies an opened library.
+_library_tokens: weakref.WeakKeyDictionary[Engine, int] = weakref.WeakKeyDictionary()
 
 
 class LibraryUnavailableError(RuntimeError):
@@ -62,7 +63,8 @@ class LibraryReader:
 
     The reader captures the library's directory and database engine when created. If the library
     is closed, or another library (or the same one again) is opened, the reader becomes invalid
-    and refuses to query. Entry IDs are only meaningful together with `token`.
+    and refuses to query. Entry IDs are only meaningful together with `token`, which stays the
+    same for every reader of the same opened library and changes when a library is (re)opened.
     """
 
     def __init__(
@@ -78,7 +80,9 @@ class LibraryReader:
         self._library = library
         self._library_dir: Path = library.library_dir
         self._engine: Engine = library.engine
-        self._token = next(_token_counter)
+        if (token := _library_tokens.get(self._engine)) is None:
+            token = _library_tokens[self._engine] = next(_token_counter)
+        self._token = token
         self._chunk_size = chunk_size
         self._cache_size = max(0, cache_size)
         self._paths: OrderedDict[int, Path | None] = OrderedDict()
@@ -88,7 +92,7 @@ class LibraryReader:
 
     @property
     def token(self) -> int:
-        """A unique value for the opened library this reader reads from."""
+        """Identifies the opened library; shared by readers of the same opened library."""
         return self._token
 
     @property

@@ -254,6 +254,21 @@ def test_revisiting_uses_cache(qtbot: QtBot, manager: ImageViewerManager, librar
     assert manager.cache.stats.hits >= 1
 
 
+def test_cache_is_reused_when_viewer_is_reopened(
+    qtbot: QtBot,
+    manager: ImageViewerManager,
+    library,
+    decode: GatedDecode,  # pyright: ignore
+):
+    lib, ids = library
+    manager.open(lib, ids, start_id=ids[0])
+    _wait_for_entry(qtbot, manager, 0)
+    manager.close()
+    manager.open(lib, ids, start_id=ids[0])
+    _wait_for_entry(qtbot, manager, 0)
+    assert [p.name for p in decode.calls] == ["a.png"]
+
+
 def test_modified_file_is_decoded_again(
     qtbot: QtBot,
     manager: ImageViewerManager,

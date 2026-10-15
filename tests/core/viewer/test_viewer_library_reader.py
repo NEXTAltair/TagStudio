@@ -132,6 +132,12 @@ def test_reopened_library_is_a_different_library(file_library: Library, tmp_path
     assert new_reader.resolve(ids)[0] is not None
 
 
+def test_token_identifies_the_opened_library(library: Library):
+    first = LibraryReader(library)
+    first.close()
+    assert LibraryReader(library).token == first.token
+
+
 def test_explicit_close(library: Library):
     reader = LibraryReader(library)
     reader.close()
