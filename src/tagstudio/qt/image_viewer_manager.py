@@ -360,7 +360,10 @@ class ImageViewerManager(QObject):
         assert isinstance(key, LoadKey)
         actions = self._scheduler.finish(request.request_id)
         if actions.apply and self._session is not None and self._viewer is not None:
-            if isinstance(outcome, DecodedImage):
+            if isinstance(outcome, DecodedImage) and not self._entry_still_at(key.image):
+                # The entry was removed or relinked from the main window while it loaded.
+                self._show_current()
+            elif isinstance(outcome, DecodedImage):
                 self._show_image(key, outcome)
             elif outcome.kind == DecodeErrorKind.CHANGED and not self._retried_change:
                 # The file was modified after it was checked; check it again, once.
@@ -374,6 +377,17 @@ class ImageViewerManager(QObject):
                 self._show_failure(outcome)
         if actions.start is not None:
             self._start(actions.start)
+
+    def _entry_still_at(self, image_key: ImageKey) -> bool:
+        """Whether the entry of a loaded image still points to the file that was loaded."""
+        reader = self._reader
+        if reader is None or image_key.library_token != reader.token:
+            return False
+        try:
+            location = reader.resolve_one(image_key.entry_id)
+        except LibraryUnavailableError:
+            return False
+        return location is not None and location.path == image_key.path
 
     def _show_image(self, key: LoadKey, image: DecodedImage) -> None:
         assert self._viewer is not None

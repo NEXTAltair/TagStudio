@@ -356,6 +356,62 @@ def test_relinked_entry_uses_new_path(qtbot: QtBot, manager: ImageViewerManager,
     assert viewer.name_label.text() == "moved.png"
 
 
+def _open_and_settle(qtbot: QtBot, manager: ImageViewerManager, lib: Library, ids: list[int]):
+    """Open at the first image and wait until loading and the first resize have settled."""
+    manager.open(lib, ids, start_id=ids[0])
+    _wait_for_entry(qtbot, manager, 0)
+    qtbot.waitUntil(
+        lambda: manager.scheduler.is_idle and not manager._resize_timer.isActive(),
+        timeout=TIMEOUT_MS,
+    )
+
+
+def test_entry_relinked_while_loading_is_reloaded(
+    qtbot: QtBot,
+    manager: ImageViewerManager,
+    library,
+    decode: GatedDecode,  # pyright: ignore
+):
+    lib, ids = library
+    _open_and_settle(qtbot, manager, lib, ids)
+    viewer = manager.viewer
+    assert viewer is not None
+
+    decode.gate = threading.Event()
+    decode.entered.clear()
+    viewer.navigate.emit(1)  # c.png
+    assert decode.entered.wait(5)
+    # Relink c.png's entry to another file while c.png is still being decoded.
+    Image.new("RGB", (300, 40)).save(lib.library_dir / "other.png")
+    assert lib.update_entry_path(ids[2], Path("other.png"))
+    decode.gate.set()
+    qtbot.waitUntil(lambda: _shown_size(manager) == (300, 40), timeout=TIMEOUT_MS)
+    assert viewer.name_label.text() == "other.png"
+    assert [p.name for p in decode.calls] == ["a.png", "c.png", "other.png"]
+
+
+def test_entry_removed_while_loading_is_not_shown(
+    qtbot: QtBot,
+    manager: ImageViewerManager,
+    library,
+    decode: GatedDecode,  # pyright: ignore
+):
+    lib, ids = library
+    _open_and_settle(qtbot, manager, lib, ids)
+    viewer = manager.viewer
+    assert viewer is not None
+
+    decode.gate = threading.Event()
+    decode.entered.clear()
+    viewer.navigate.emit(1)  # c.png
+    assert decode.entered.wait(5)
+    lib.remove_entries([ids[2]])
+    decode.gate.set()
+    qtbot.waitUntil(lambda: manager.scheduler.is_idle, timeout=TIMEOUT_MS)
+    assert viewer.canvas.message == Translations["image_viewer.error.missing_entry"]
+    assert viewer.canvas.image is None
+
+
 def test_corrupt_file(qtbot: QtBot, manager: ImageViewerManager, library):  # pyright: ignore
     lib, ids = library
     (lib.library_dir / "c.png").write_bytes(b"garbage")
