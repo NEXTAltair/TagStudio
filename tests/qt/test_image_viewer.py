@@ -31,12 +31,13 @@ def _wheel(
     delta_y: int,
     delta_x: int = 0,
     modifiers: Qt.KeyboardModifier = Qt.KeyboardModifier.NoModifier,
+    pixel_delta_y: int = 0,
 ) -> None:
     pos = QPointF(widget.width() / 2, widget.height() / 2)
     event = QWheelEvent(
         pos,
         widget.mapToGlobal(pos),
-        QPoint(0, 0),
+        QPoint(0, pixel_delta_y),
         QPoint(delta_x, delta_y),
         Qt.MouseButton.NoButton,
         modifiers,
@@ -106,6 +107,24 @@ def test_wheel_high_resolution_deltas(viewer: ImageViewer):
     viewer.navigate.connect(steps.append)
     for _ in range(5):
         _wheel(viewer.canvas, -30)
+    assert steps == [1]
+
+
+def test_pixel_only_touchpad_deltas(viewer: ImageViewer):
+    """Touchpads that report pixel deltas without angle deltas still navigate."""
+    steps: list[int] = []
+    viewer.navigate.connect(steps.append)
+    for _ in range(4):
+        _wheel(viewer.canvas, 0, pixel_delta_y=-40)
+    assert steps == [1]
+    _wheel(viewer.canvas, 0, pixel_delta_y=130)
+    assert steps == [1, -1]
+
+
+def test_angle_delta_takes_precedence_over_pixel_delta(viewer: ImageViewer):
+    steps: list[int] = []
+    viewer.navigate.connect(steps.append)
+    _wheel(viewer.canvas, -120, pixel_delta_y=-1000)
     assert steps == [1]
 
 

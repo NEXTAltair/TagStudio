@@ -15,6 +15,9 @@ from tagstudio.qt.views.image_viewer_view import ImageViewerView
 WHEEL_STEP = 120
 """Angle delta of one standard mouse wheel notch (15 degrees, in eighths of a degree)."""
 
+PIXELS_PER_STEP = 120
+"""Scroll distance that moves one entry, for events that only report a pixel delta."""
+
 _IGNORED_WHEEL_MODIFIERS = (
     Qt.KeyboardModifier.ControlModifier
     | Qt.KeyboardModifier.ShiftModifier
@@ -61,7 +64,8 @@ class ImageViewer(ImageViewerView):
 
     The window only reports navigation intents; the image viewer manager owns the session and
     decides what to show. Input is handled locally:
-        - Mouse wheel down/up: next/previous image. Horizontal scrolling and wheel input with
+        - Mouse wheel down/up: next/previous image. Touchpads that only report pixel deltas
+          move one image per `PIXELS_PER_STEP` pixels. Horizontal scrolling and wheel input with
           modifier keys are ignored.
         - Right/Down/Page Down and Left/Up/Page Up: next/previous image.
         - Home/End: first/last image.
@@ -158,7 +162,11 @@ class ImageViewer(ImageViewerView):
         if event.modifiers() & _IGNORED_WHEEL_MODIFIERS:
             self._wheel.reset()
             return
-        steps = self._wheel.feed(event.angleDelta().y())
+        delta_y = event.angleDelta().y()
+        if delta_y == 0:
+            # Some touchpads only report a pixel delta.
+            delta_y = round(event.pixelDelta().y() * WHEEL_STEP / PIXELS_PER_STEP)
+        steps = self._wheel.feed(delta_y)
         if steps:
             self.navigate.emit(steps)
 
