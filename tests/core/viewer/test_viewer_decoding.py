@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 
+import os
 import subprocess
 import sys
 import tracemalloc
@@ -575,7 +576,8 @@ def test_viewer_core_does_not_import_qt():
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        env={"PYTHONPATH": str(src)},
+        # Keep the inherited environment: Windows needs SYSTEMROOT etc. to load Winsock.
+        env={**os.environ, "PYTHONPATH": str(src)},
         check=False,
     )
     assert result.returncode == 0, result.stderr
