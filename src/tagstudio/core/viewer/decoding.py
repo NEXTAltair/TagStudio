@@ -261,17 +261,17 @@ def _normalize_mode(im: Image.Image) -> Image.Image:
         return im.convert("L")
     if mode.startswith("I;16"):
         # Scale 16-bit samples down to 8 bits instead of clipping them.
-        return Image.fromarray((np.asarray(im) >> 8).astype(np.uint8), mode="L")
+        return Image.fromarray((np.asarray(im) >> 8).astype(np.uint8))
     if mode == "I":
         arr = np.asarray(im)
         if arr.max(initial=0) > 255:
             arr = np.clip(arr, 0, 65535) >> 8
-        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="L")
+        return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
     if mode == "F":
         arr = np.asarray(im, dtype=np.float32)
         lo, hi = float(arr.min(initial=0)), float(arr.max(initial=0))
         scale = 255.0 / (hi - lo) if hi > lo else 0.0
-        return Image.fromarray(((arr - lo) * scale).astype(np.uint8), mode="L")
+        return Image.fromarray(((arr - lo) * scale).astype(np.uint8))
     # CMYK, YCbCr, LAB, HSV, etc. NOTE: Embedded ICC profiles are not applied.
     return im.convert("RGB")
 
@@ -462,7 +462,7 @@ def _decode_raw(
         raise _DecodeError(kind, f"{name}: {e}") from e
 
     _check_cancel(cancel)
-    im = Image.fromarray(np.ascontiguousarray(rgb), mode="RGB")
+    im = Image.fromarray(np.ascontiguousarray(rgb))
     del rgb
     # Fit the actual developed size, which can differ slightly from LibRaw's reported size.
     out = fit_size(im.size, target, request.policy.upscale and not half_size)
