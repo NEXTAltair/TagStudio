@@ -5,11 +5,13 @@
 
 Only the `id` and `path` columns are read, in bounded chunks, with short-lived connections.
 Decoders receive plain `Path` values and never see the library, sessions, or ORM objects.
+
+Paths aren't cached: the viewer is non-modal, so entries can be removed, renamed, or relinked
+from the main window at any time, and every lookup must see the library as it is now.
 """
 
 import itertools
 import weakref
-from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +29,6 @@ logger = structlog.get_logger(__name__)
 
 # Kept well below SQLite's bound parameter limit (999 on older builds).
 DEFAULT_CHUNK_SIZE: int = 500
-DEFAULT_PATH_CACHE_SIZE: int = 2048
 
 _token_counter = itertools.count(1)
 # Every opened library gets a new engine, so the engine identifies an opened library.
@@ -67,12 +68,7 @@ class LibraryReader:
     same for every reader of the same opened library and changes when a library is (re)opened.
     """
 
-    def __init__(
-        self,
-        library: Library,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        cache_size: int = DEFAULT_PATH_CACHE_SIZE,
-    ) -> None:
+    def __init__(self, library: Library, chunk_size: int = DEFAULT_CHUNK_SIZE) -> None:
         if library.library_dir is None or library.engine is None:
             raise LibraryUnavailableError("No library is open")
         if chunk_size < 1:
@@ -84,8 +80,6 @@ class LibraryReader:
             token = _library_tokens[self._engine] = next(_token_counter)
         self._token = token
         self._chunk_size = chunk_size
-        self._cache_size = max(0, cache_size)
-        self._paths: OrderedDict[int, Path | None] = OrderedDict()
         self._closed = False
         self.query_count = 0
         """Number of SELECT statements executed (for tests and measurements)."""
@@ -110,7 +104,6 @@ class LibraryReader:
     def close(self) -> None:
         """Stop reading. Called before the library is closed."""
         self._closed = True
-        self._paths.clear()
 
     def _ensure_valid(self) -> None:
         if not self.is_valid():
@@ -121,43 +114,26 @@ class LibraryReader:
         stmt = select(Entry.id, Entry.path).where(Entry.id.in_(ids))
         return {row[0]: row[1] for row in conn.execute(stmt)}
 
-    def _remember(self, entry_id: int, path: Path | None) -> None:
-        if self._cache_size == 0:
-            return
-        self._paths[entry_id] = path
-        self._paths.move_to_end(entry_id)
-        while len(self._paths) > self._cache_size:
-            self._paths.popitem(last=False)
-
     def resolve(self, entry_ids: Sequence[int]) -> list[EntryLocation | None]:
-        """Return the location of each entry, in the given order.
+        """Return the current location of each entry, in the given order.
 
-        Missing entries (e.g. removed from the library) are returned as None.
+        Missing entries (e.g. removed from the library) are returned as None. Every call reads
+        the database, so changes made since the last call are always seen.
 
         Raises:
             LibraryUnavailableError: If the library was closed or replaced.
         """
         self._ensure_valid()
-        rel_paths: dict[int, Path | None] = {}
-        wanted: list[int] = []
-        for entry_id in dict.fromkeys(entry_ids):
-            if entry_id in self._paths:
-                self._paths.move_to_end(entry_id)
-                rel_paths[entry_id] = self._paths[entry_id]
-            else:
-                wanted.append(entry_id)
-
-        if wanted:
+        rel_paths: dict[int, Path] = {}
+        unique = list(dict.fromkeys(entry_ids))
+        if unique:
             with self._engine.connect() as conn:
-                for chunk in _chunks(wanted, self._chunk_size):
-                    found = self._select_paths(conn, chunk)
-                    for entry_id in chunk:
-                        rel_paths[entry_id] = found.get(entry_id)
-                        self._remember(entry_id, rel_paths[entry_id])
+                for chunk in _chunks(unique, self._chunk_size):
+                    rel_paths.update(self._select_paths(conn, chunk))
 
         return [
             None
-            if (rel_path := rel_paths[entry_id]) is None
+            if (rel_path := rel_paths.get(entry_id)) is None
             else EntryLocation(self._token, entry_id, self._library_dir / rel_path)
             for entry_id in entry_ids
         ]

@@ -77,6 +77,8 @@ class ImageCache:
     def __init__(self, max_bytes: int = DEFAULT_CACHE_BYTES) -> None:
         self._max_bytes = max(0, max_bytes)
         self._items: OrderedDict[LoadKey, DecodedImage] = OrderedDict()
+        # Every cached size of each image, so lookups don't scan the whole cache.
+        self._variants: dict[ImageKey, set[LoadKey]] = {}
         self._bytes = 0
         self.stats = CacheStats()
 
@@ -95,8 +97,9 @@ class ImageCache:
         """Return the smallest cached image that covers the requested target size, if any."""
         best_key: LoadKey | None = None
         best: DecodedImage | None = None
-        for k, image in self._items.items():
-            if k.image != key.image or not covers(image, key.target_size, key.image.policy):
+        for k in self._variants.get(key.image, ()):
+            image = self._items[k]
+            if not covers(image, key.target_size, key.image.policy):
                 continue
             if best is None or image.nbytes < best.nbytes:
                 best_key, best = k, image
@@ -121,23 +124,32 @@ class ImageCache:
             # older version.
             self.stats.rejected += 1
             return False
-        if (old := self._items.pop(key, None)) is not None:
-            self._bytes -= old.nbytes
+        self._remove(key)
         self._items[key] = image
+        self._variants.setdefault(key.image, set()).add(key)
         self._bytes += image.nbytes
         self.stats.stores += 1
         while self._bytes > self._max_bytes and self._items:
-            _, evicted = self._items.popitem(last=False)
-            self._bytes -= evicted.nbytes
+            self._remove(next(iter(self._items)))
             self.stats.evictions += 1
         self.stats.peak_bytes = max(self.stats.peak_bytes, self._bytes)
         return True
 
+    def _remove(self, key: LoadKey) -> None:
+        if (image := self._items.pop(key, None)) is None:
+            return
+        self._bytes -= image.nbytes
+        variants = self._variants[key.image]
+        variants.discard(key)
+        if not variants:
+            del self._variants[key.image]
+
     def discard_library(self, library_token: int) -> None:
         """Remove every image read from a library."""
         for k in [k for k in self._items if k.image.library_token == library_token]:
-            self._bytes -= self._items.pop(k).nbytes
+            self._remove(k)
 
     def clear(self) -> None:
         self._items.clear()
+        self._variants.clear()
         self._bytes = 0

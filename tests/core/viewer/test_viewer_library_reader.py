@@ -68,25 +68,18 @@ def test_resolve_many_stays_below_parameter_limit(library: Library):
     assert reader.query_count == 3  # 500 + 500 + 201, never one query per entry
 
 
-def test_resolve_caches_paths(library: Library):
+def test_resolve_sees_changes_made_after_earlier_lookups(library: Library):
+    """The viewer is non-modal: entries can be relinked or removed between lookups."""
+    ids = _add_entries(library, 2)
     reader = LibraryReader(library)
-    reader.resolve([1, 2])
-    reader.resolve([2, 1])
-    assert reader.query_count == 1
+    assert reader.resolve(ids)[0] is not None
 
-
-def test_resolve_without_cache_does_not_query_per_entry(library: Library):
-    ids = _add_entries(library, 20)
-    reader = LibraryReader(library, cache_size=0)
-    assert all(reader.resolve(ids))
-    assert reader.query_count == 1
-
-
-def test_path_cache_is_bounded(library: Library):
-    ids = _add_entries(library, 10)
-    reader = LibraryReader(library, cache_size=3)
-    reader.resolve(ids)
-    assert len(reader._paths) == 3  # pyright: ignore[reportPrivateUsage]
+    assert library.update_entry_path(ids[0], Path("moved/renamed.png"))
+    library.remove_entries([ids[1]])
+    first, second = reader.resolve(ids)
+    assert first is not None
+    assert first.path == reader.library_dir / "moved/renamed.png"
+    assert second is None
 
 
 def test_scan(library: Library):

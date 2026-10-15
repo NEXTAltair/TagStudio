@@ -324,6 +324,23 @@ def test_removed_entry(qtbot: QtBot, manager: ImageViewerManager, library):  # p
     assert viewer.name_label.text() == ""  # The previous file name isn't left on screen
 
 
+def test_relinked_entry_uses_new_path(qtbot: QtBot, manager: ImageViewerManager, library):  # pyright: ignore
+    """An entry relinked from the main window while the viewer is open shows its new file."""
+    lib, ids = library
+    manager.open(lib, ids, start_id=ids[0])
+    _wait_for_entry(qtbot, manager, 0)
+    viewer = manager.viewer
+    assert viewer is not None
+    viewer.navigate.emit(1)
+    _wait_for_entry(qtbot, manager, 2)
+
+    (lib.library_dir / "a.png").rename(lib.library_dir / "moved.png")
+    assert lib.update_entry_path(ids[0], Path("moved.png"))
+    viewer.navigate.emit(-1)
+    _wait_for_entry(qtbot, manager, 0)
+    assert viewer.name_label.text() == "moved.png"
+
+
 def test_corrupt_file(qtbot: QtBot, manager: ImageViewerManager, library):  # pyright: ignore
     lib, ids = library
     (lib.library_dir / "c.png").write_bytes(b"garbage")

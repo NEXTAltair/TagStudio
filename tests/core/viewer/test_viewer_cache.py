@@ -4,6 +4,9 @@
 
 from pathlib import Path
 
+import pytest
+
+from tagstudio.core.viewer import cache as cache_module
 from tagstudio.core.viewer.cache import ImageCache, ImageKey, LoadKey, covers
 from tagstudio.core.viewer.decoding import DEFAULT_POLICY, DecodedImage, DecodePolicy, FileVersion
 
@@ -144,3 +147,33 @@ def test_clear():
     cache.clear()
     assert len(cache) == 0
     assert cache.bytes_used == 0
+
+
+def test_lookup_only_checks_variants_of_the_same_image(monkeypatch: pytest.MonkeyPatch):
+    """Lookups don't scan unrelated images, so browsing many small images stays fast."""
+    cache = ImageCache()
+    for entry_id in range(2000):
+        cache.put(_key(entry_id), _image(4, 4))
+    checked: list[DecodedImage] = []
+    real_covers = cache_module.covers
+
+    def counting_covers(image, target_size, policy):  # pyright: ignore
+        checked.append(image)
+        return real_covers(image, target_size, policy)
+
+    monkeypatch.setattr(cache_module, "covers", counting_covers)
+    assert cache.get(_key(1234)) is not None
+    assert cache.get(_key(99999)) is None
+    assert len(checked) == 1
+
+
+def test_index_stays_consistent_after_eviction_and_discard():
+    cache = ImageCache(max_bytes=10 * 10 * 3 * 2)
+    for entry_id in range(5):
+        cache.put(_key(entry_id), _image(10, 10))
+    assert [cache.get(_key(i)) is not None for i in range(5)] == [False, False, False, True, True]
+    cache.discard_library(1)
+    assert len(cache) == 0
+    assert cache.bytes_used == 0
+    assert cache.put(_key(3), _image(10, 10))
+    assert cache.get(_key(3)) is not None
